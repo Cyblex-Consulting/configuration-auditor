@@ -1,131 +1,201 @@
-# fortigate-security-auditor
-Tool to check a fortigate configuration with the CIS Benchmark.
+# Configuration Auditor
 
-## Preparing the configuration
+A generic, modular CLI tool to audit a device configuration against security
+benchmarks (CIS, Cyblex, ...).
 
-Parsing is done internally with this project: https://github.com/ssato/fortios-xutils
+The tool is split into a vendor-agnostic **core** and pluggable **modules**.
+Each module knows how to parse one vendor's configuration and ships its own set
+of checks. Two modules are provided:
 
-It shall be installed with `pip install fortios_xutils`.
+- `fortigate` — FortiGate / FortiManager (full implementation, CIS + Cyblex benchmarks).
+- `pfsense` — pfSense (skeleton only, not yet implemented).
 
-**Note :** The parsing may fail if the config contains non utf-8 characters. A quick fix has been implemented in the tool with the `--autofix` flag that may result in non standard characters being removed.
-
-## Running the benchmark
+## Architecture
 
 ```
-usage: fortigate-security-auditor.py [-h] [-q] [-v] [-j] [-o OUTPUT] [-l LEVELS [LEVELS ...]] [-i IDS [IDS ...]] [-c] [-w WAN [WAN ...]] [--interfaces] [--zones] [--autofix] config
+configuration-auditor.py     # generic entrypoint (--module required)
+core/                        # vendor-agnostic building blocks
+  checker.py                 #   Checker base class (all checks subclass it)
+  display.py                 #   output / prompt helper
+  device.py                  #   Device base class (parsed config wrapper)
+  module.py                  #   Module base class (vendor integration point)
+  registry.py                #   discovers/loads modules by name
+modules/
+  fortigate/                 # FortiGate module (self-contained)
+    module.py                #   parsing (fortios_xutils) + check discovery
+    device.py                #   FortigateDevice (config accessors)
+    fortiguard.py            #   FortiGuard category/app ID lookup
+    libs/FortigateAppControlID   # git submodule (App Control CSVs)
+    checks/<benchmark>/      #   the actual checks
+  pfsense/                   # pfSense module (skeleton)
+    module.py
+    device.py
+    checks/
+```
 
-Apply a benchmark to a Fortigate configuration file. Example: fortigate-security-auditor.py -q -o results.csv -l 1 2 -w WAN1 WAN2 --autofix firewall.conf
+The entrypoint never imports vendor code directly. It loads the requested
+module through `core/registry.py`, asks it to parse the config into a `Device`,
+then runs the checks the module exposes.
+
+## Setup
+
+FortiGate parsing is done with https://github.com/ssato/fortios-xutils :
+
+```
+pip install fortios_xutils
+```
+
+The FortiGate module ships an App Control ID database as a git submodule:
+
+```
+git submodule update --init
+```
+
+**Note:** FortiGate parsing may fail if the config contains non utf-8
+characters or hits a known parser bug. The `--autofix` flag works around both
+(it may remove some non standard characters).
+
+## Running
+
+```
+usage: configuration-auditor.py [-h] -m {fortigate,pfsense} [-q] [-v] [-j]
+                                [-o OUTPUT] [-l LEVELS [LEVELS ...]]
+                                [-i IDS [IDS ...]] [-c] [-w WAN [WAN ...]]
+                                [--interfaces] [--zones] [--autofix] config
+
+Configuration Auditor - apply a security benchmark to a device configuration file.
 
 positional arguments:
-  config                Configuration file exported from the fortigate or fortimanager
+  config                Configuration file exported from the device
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
+  -m, --module {fortigate,pfsense}
+                        Configuration module to use (required)
   -q, --quiet           Not interactive: ignore manual steps
   -v, --verbose         Increase verbosity
-  -j, --json            Input file is json already parsed by fortios_xutils
+  -j, --json            Input file is json already parsed by the module
   -o OUTPUT, --output OUTPUT
                         Output CSV File
   -l LEVELS [LEVELS ...], --levels LEVELS [LEVELS ...]
                         Levels to check. (default: 1)
   -i IDS [IDS ...], --ids IDS [IDS ...]
                         Checks id to perform. (default: all if applicable)
-  -c, --resume          Resume an audit that was already started. Automatic items are re-checked but manually set values are retrieved from cache.
+  -c, --resume          Resume an audit that was already started. Automatic
+                        items are re-checked but manually set values are
+                        retrieved from cache.
   -w WAN [WAN ...], --wan WAN [WAN ...]
-                        List of wan interfaces separated by spaces (example: --wan port1 port2)
+                        List of wan interfaces separated by spaces
   --interfaces          Show list of interfaces and exit
   --zones               Show list of zones and exit
   --autofix             Automatically try to fix errors in input file
 ```
 
-The tool implements some basic caching. When a benchmark is run, the result is saved in `~/.cache/fortigate-security-auditor.json`. The config file path is used to discriminate the various banchmarks performed in the cache file.
+Example:
 
-By default, re-running the tool will overwrite the cache and so do not use it. Adding `-c` or `--resume` will reload previous results from the cache. Only manual step results are recovered from the cache. **Automatic checks are re-run anyway.**
+```
+python3 configuration-auditor.py -m fortigate -q -o results.csv -l 1 2 -w port1 port2 --autofix firewall.conf
+```
+
+The `--module` / `-m` flag is **required**.
+
+Results are cached per module in `~/.cache/configuration-auditor-<module>.json`,
+keyed by the config file path. By default a rerun overwrites the cache; add
+`-c` / `--resume` to reload previous **manual** answers (automatic checks always
+rerun).
+
+## Adding a module
+
+Create a sub-package under `modules/<vendor>/` with:
+
+- `__init__.py` exposing a `get_module(display, verbose)` factory.
+- `module.py` with a `Module` subclass implementing `parse()` (and optionally
+  `parse_json()`), setting `name`, `description`, `device_class`, and
+  implementing `load_checks()`.
+- `device.py` with a `Device` subclass implementing `get_config()` and any
+  vendor accessors your checks need.
+- `checks/` with the discovery `__init__.py` pattern (see below) and one
+  sub-folder per benchmark.
+
+The registry auto-discovers any sub-package of `modules/` that exposes
+`get_module()`; it then appears automatically in `--module` choices.
 
 ## Adding checks
 
-### Implementation prerequisites
+Create a sub-folder in a module's `checks/` directory (one per benchmark). Each
+check is an independent python file whose class subclasses `Checker`.
 
-To add a new benchmark, create a subfolder in the `checks` directory. Then in the benchmark folder, it check is an independant python file which needs to specify the `checker` parent class. 2 examples are given as a start in the `checks\examples` benchmark folder.
+**Check discovery is by `Checker.__subclasses__()`, not by scanning files.** A
+check only runs if its module has been imported. Each `checks/` package and each
+benchmark sub-folder contains an `__init__.py` that imports its contents; when
+adding a new benchmark folder, copy an existing `__init__.py` into it.
 
-Mandatory subclass variables are:
+Mandatory subclass variables:
 
 - `self.id`: Reference for the requirement (in the benchmark)
 - `self.title`: Title for the requirement
 - `self.levels`: List of levels applicable for the requirement
-- `self.auto`: True if the check does not need the operator to review and assess himself if this is compliant
-- `self.benchmark_version`: The benchmark version which was used to implement the check
+- `self.auto`: True if the check does not need the operator to review and assess
+- `self.benchmark_version`: The benchmark version used to implement the check
 - `self.benchmark_author`: The benchmark author
 
-The function `do_check()` needs to be implemented. It shall return:
+Implement `do_check()`, which returns:
 - `True` if the check passed
 - `False` if the check failed
-- `None` if for some reason the check was not performed (for instance, not fully implemented). The check will be marked as `SKIP` in the results
+- `None` if the check was not performed (marked `SKIP`)
 
-When run in verbose mode, the tool will print messages, they are configured in the checker and displayed when it is finished. The following function are used:
-- `self.set_message(text)`: Configure the message. If the function is run twice, the last message overwrites the previous one.
-- `self.add_message(text)`: Add a new line to the existing message. If no message exists, it creates it so it may be used instead of `set_message` even in case of single message output.
+Message helpers (shown in verbose mode / logs):
+- `self.set_message(text)` — set the message (overwrites).
+- `self.add_message(text)` — append a line to the message.
 
-For non automatic checks where the operator needs to state if it is ok or not, the checker parent class has some helper functions in the same spirit as self.set_message or add_message
-- `self.ask(question)` : Takes in argument a string (can contain `\n`) and displays it. Then wait for user input and returns the typed characters
-Implementation on how the answer shall be processed before returning `True` or `False` is left to the check developper.
-- `self.add_question_context(string)` : For more complex use case, it is possible to generate the question in an easy way by appending strings to the question context. This method can be called multiple times, each time will add a new line to the context.
-- `self.ask_if_correct()` : This method displays the context and directly ask the user wheter he validates the requirement or not.
+Manual-check helpers:
+- `self.ask(question)` — display a question, return the user's input.
+- `self.add_question_context(string)` — append a line to the question context.
+- `self.ask_if_correct()` — display the context and ask the user to validate.
 
-A few helpers can be used in checks:
-- `self.get_config(chapter = None)`: Returns a dictionnary of a single configuration block, or the full config
-- `self.get_interfaces()`: Returns a list of all the firewall interfaces
-- `self.get_zones()`: Returns a list of all the firewall zones
-- `self.get_wan_interfaces()`: Returns a list of all the firewall WAN interfaces. If it was configured via the `--wan` flag then it is returned directly. If not, the user is showed the list of interfaces and ask to choose which one are WAN.
-- `self.get_policies(srcintfs=None, dstintfs=None, actions=None)`: Returns a list of all the firewall policies. Some filters can be applied.
-- `self.get_ips_sensors(names=None)`: Returns a list of all the IPS sensors. Some filters can be applied.
-- `self.get_av_profiles(names=None)`: Returns a list of all the IPS sensors. Some filters can be applied.
-- `self.get_dnsfilter_profiles(names=None)`: Returns a list of all the DNS profiles. Some filters can be applied.
-- `self.get_appcontrol_profiles(names=None)`: Returns a list of all the App Control profiles. Some filters can be applied.
-- `self.is_ip(param)`: Checks if `param` is an IP format
-- `self.is_fqdn(param)`: Checks if `param` is compliant with a valid FQDN format
-- `self.get_service_groups_containing_protocols(protocols=None)`: Returns all service groups that includes a protocol (for instance "Windows AD" is returned when protocols = ["DNS"])
+Generic helpers (in `core/checker.py`):
+- `self.get_config(chapter=None)` — a single config block, or the full config.
+- `self.is_ip(param)` — checks IP format.
+- `self.is_fqdn(param)` — checks FQDN format.
+- `self.get_wan_interfaces()` — WAN interfaces (from `--wan` or prompted).
+- `self.device` — the vendor `Device` for vendor-specific accessors.
+  (`self.firewall` remains as a backward-compatible alias.)
+
+FortiGate `Device` accessors available via `self.device` (or `self.firewall`):
+`get_interfaces()`, `get_zones()`, `get_policies(...)`, `get_ips_sensors(...)`,
+`get_av_profiles(...)`, `get_dnsfilter_profiles(...)`,
+`get_appcontrol_profiles(...)`,
+`get_service_groups_containing_protocols(...)`, and `fortiguard` lookups.
 
 ### Example
 
-Here is a single example automatic checker:
+A single automatic check (from the FortiGate module):
 
 ```python
-from checker import Checker
+from core.checker import Checker
 
-class Check_Example_Manual(Checker):
+class Check_Example_Auto(Checker):
 
-    def __init__(self, firewall, display, verbose=False):
-
-        super().__init__(firewall, display, verbose)
-
+    def __init__(self, device, display, verbose=False):
+        super().__init__(device, display, verbose)
         self.id = "1.1.2"
         self.title = "Example Auto Check"
         self.levels = [1, 2]
         self.auto = True
-        self.enabled = False # Remove this line to enable
+        self.enabled = False  # Remove this line to enable
+        self.benchmark_version = "v1.1.0"
         self.benchmark_author = "Example Org."
 
     def do_check(self):
         config_system_dns = self.get_config("system dns")
 
         if "primary" not in config_system_dns.keys():
-            self.set_message(f'No primary DNS configured')
+            self.set_message('No primary DNS configured')
             return False
 
         if not self.is_ip(config_system_dns["primary"]):
-            self.set_message(f'{config_system_dns["primary"]} is not a valid IP for primary DNS')
+            self.set_message(f'{config_system_dns["primary"]} is not a valid IP')
             return False
-
-        if "secondary" not in config_system_dns.keys():
-            self.set_message(f'No secondary DNS configured')
-            return False
-
-        if not self.is_ip(config_system_dns["secondary"]):
-            self.set_message(f'{config_system_dns["secondary"]} is not a valid IP for secondary DNS')
-            return False
-
-        self.set_message(f'{config_system_dns["primary"]} {config_system_dns["secondary"]}')
 
         return True
 ```

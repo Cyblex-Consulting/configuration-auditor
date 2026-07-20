@@ -1,3 +1,3 @@
-[submodule "libs/FortigateAppControlID"]
-	path = libs/FortigateAppControlID
+[submodule "modules/fortigate/libs/FortigateAppControlID"]
+	path = modules/fortigate/libs/FortigateAppControlID
 	url = https://github.com/Jaimer/FortigateAppControlID.git
