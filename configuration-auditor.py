@@ -648,12 +648,14 @@ if getattr(args, 'wan', None) is not None:
     device.set_wan_interfaces(args.wan)
 
 # Display interfaces (vendor-specific formatting is delegated to the device)
-if args.interfaces:
+# `interfaces` is provided only for the `interfaces` verb; guard access.
+if getattr(args, 'interfaces', False):
     device.show_interfaces()
     exit(0)
 
 # Display zones (vendor-specific formatting is delegated to the device)
-if args.zones:
+# `zones` is provided only for the `zones` verb; guard access.
+if getattr(args, 'zones', False):
     device.show_zones()
     exit(0)
 
