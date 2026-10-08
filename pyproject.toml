@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "configuration-auditor"
-version = "0.1.1"
+version = "0.1.2"
 description = "Configuration Auditor - audit exported firewall device configs against security benchmarks"
 readme = "README.md"
 requires-python = ">=3.8"
