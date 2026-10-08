@@ -1,0 +1,5 @@
+# Include FortiGuard AppControlID CSVs and other vendor libs
+recursive-include modules/fortigate/libs *
+
+# Include any CSV or data files under modules
+recursive-include modules *.csv *.txt *.json

@@ -10,12 +10,18 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "GPLv2" }
 authors = [ { name = "CYBLEX Consulting" } ]
+dependencies = ["fortios_xutils"]
 
 [project.scripts]
 configuration-auditor = "configuration_auditor:main"
 
 [tool.setuptools]
 py-modules = ["configuration_auditor"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+# Ensure Fortigate vendor data (submodule) is included in built distributions
+"modules.fortigate.libs.FortigateAppControlID" = ["*", "*/*"]
 
 [tool.setuptools.packages.find]
 where = ["."]
