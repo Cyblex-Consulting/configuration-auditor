@@ -3,7 +3,7 @@ from core.checker import Checker
 
 # Imports all python files in this folder as checks.
 
-_PACKAGE = __name__  # e.g. "modules.fortigate.checks.cis_1_1_0"
+_PACKAGE = __name__  # e.g. "modules.pfsense.checks.cis_1_1_0"
 
 parent_folder = os.path.dirname(__file__)
 for module in os.listdir(parent_folder):

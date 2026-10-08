@@ -121,6 +121,34 @@ class FortigateDevice(Device):
         config_system_zone = self.get_config("system zone")
         zones = config_system_zone["edits"]
         return zones
+
+    # Prints the interfaces for the --interfaces flag
+    def show_interfaces(self):
+        print('[+] The following interfaces exist on the device:')
+        for interface in self.get_interfaces():
+            print(f'[-] {interface["edit"]}')
+            if "vdom" in interface.keys():
+                print(f'     | vdom {interface["vdom"]}')
+            if "type" in interface.keys():
+                print(f'     | type {interface["type"]}')
+            if "status" in interface.keys():
+                print(f'     | status {interface["status"]}')
+            if "ip" in interface.keys():
+                ips = ", ".join(interface["ip"])
+                print(f'     | ip {ips}')
+
+    # Prints the zones for the --zones flag
+    def show_zones(self):
+        print('[+] The following zones exist on the device:')
+        for zone in self.get_zones():
+            print(f'[-] {zone["edit"]}')
+            if "interface" in zone.keys():
+                if isinstance(zone["interface"], list):
+                    child_interfaces = ", ".join(zone["interface"])
+                else:
+                    child_interfaces = zone["interface"]
+                print(f'     | interfaces {child_interfaces}')
+
     
     # Returns WAN interfaces. If unknown, prompt the user.
     def get_wan_interfaces(self):

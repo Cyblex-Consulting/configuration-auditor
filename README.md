@@ -4,11 +4,10 @@ A generic, modular CLI tool to audit a device configuration against security
 benchmarks (CIS, Cyblex, ...).
 
 The tool is split into a vendor-agnostic **core** and pluggable **modules**.
-Each module knows how to parse one vendor's configuration and ships its own set
-of checks. Two modules are provided:
+Each module knows how to parse one vendor's configuration and ships its own set of checks. Two modules are provided:
 
-- `fortigate` — FortiGate / FortiManager (full implementation, CIS + Cyblex benchmarks).
-- `pfsense` — pfSense (skeleton only, not yet implemented).
+- `fortigate` — FortiGate / FortiManager
+- `pfsense` — pfSense
 
 ## Architecture
 
@@ -27,10 +26,10 @@ modules/
     fortiguard.py            #   FortiGuard category/app ID lookup
     libs/FortigateAppControlID   # git submodule (App Control CSVs)
     checks/<benchmark>/      #   the actual checks
-  pfsense/                   # pfSense module (skeleton)
-    module.py
-    device.py
-    checks/
+  pfsense/                   # pfSense module
+    module.py                #   parses config.xml (stdlib xml.etree)
+    device.py                #   PfsenseDevice (slash-path config accessors)
+    checks/cis_1_1_0/        #   CIS pfSense Firewall Benchmark v1.1.0
 ```
 
 The entrypoint never imports vendor code directly. It loads the requested
@@ -58,12 +57,27 @@ characters or hits a known parser bug. The `--autofix` flag works around both
 ## Running
 
 ```
-usage: configuration-auditor.py [-h] -m {fortigate,pfsense} [-q] [-v] [-j]
-                                [-o OUTPUT] [-l LEVELS [LEVELS ...]]
-                                [-i IDS [IDS ...]] [-c] [-w WAN [WAN ...]]
-                                [--interfaces] [--zones] [--autofix] config
+Configuration Auditor - apply a security benchmark to a device configuration file. Example: configuration-auditor.py analyse -m pfsense config.xml
 
-Configuration Auditor - apply a security benchmark to a device configuration file.
+positional arguments:
+  {analyse,rules,aliases,interfaces,zones}
+                        Action to perform
+    analyse             Run analysis checks
+    rules               List firewall rules in a pretty table
+    aliases             List address/service aliases in a pretty table
+    interfaces          List interfaces in a pretty table
+    zones               List zones in a pretty table
+
+options:
+  -h, --help            show this help message and exit
+```
+
+The main functionality is the `analyse` action which runs the benchmark checks on the appropriate configuration.
+
+```
+usage: configuration-auditor.py analyse [-h] -m {fortigate,pfsense} [-o OUTPUT] [-oh OUTPUT_HTML] [--autofix] [-q] [-v] [-j] [-l LEVELS [LEVELS ...]] [-i IDS [IDS ...]] [-c]
+                                        [-w WAN [WAN ...]]
+                                        config
 
 positional arguments:
   config                Configuration file exported from the device
@@ -71,30 +85,46 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -m, --module {fortigate,pfsense}
-                        Configuration module to use (required)
+                        Configuration module to use (required). Available: fortigate, pfsense
+  -o, --output OUTPUT   Output CSV File
+  -oh, --output-html OUTPUT_HTML
+                        Export a standalone HTML report with Aliases/Interfaces/Zones/Rules
+  --autofix             Automatically try to fix errors in input file
   -q, --quiet           Not interactive: ignore manual steps
   -v, --verbose         Increase verbosity
   -j, --json            Input file is json already parsed by the module
-  -o OUTPUT, --output OUTPUT
-                        Output CSV File
-  -l LEVELS [LEVELS ...], --levels LEVELS [LEVELS ...]
+  -l, --levels LEVELS [LEVELS ...]
                         Levels to check. (default: 1)
-  -i IDS [IDS ...], --ids IDS [IDS ...]
+  -i, --ids IDS [IDS ...]
                         Checks id to perform. (default: all if applicable)
-  -c, --resume          Resume an audit that was already started. Automatic
-                        items are re-checked but manually set values are
-                        retrieved from cache.
-  -w WAN [WAN ...], --wan WAN [WAN ...]
-                        List of wan interfaces separated by spaces
-  --interfaces          Show list of interfaces and exit
-  --zones               Show list of zones and exit
-  --autofix             Automatically try to fix errors in input file
+  -c, --resume          Resume an audit that was already started. Automatic items are re-checked but manually set values are retrieved from cache.
+  -w, --wan WAN [WAN ...]
+                        List of wan interfaces separated by spaces (example: --wan port1 port2)
 ```
 
 Example:
 
 ```
-python3 configuration-auditor.py -m fortigate -q -o results.csv -l 1 2 -w port1 port2 --autofix firewall.conf
+python3 configuration-auditor.py analyse -m fortigate -q -o results.csv -l 1 2 -w port1 port2 --autofix firewall.conf
+```
+
+Alternatively, other actions offer an option to print to the terminal rules, interfaces, zones or aliases and to export them to a csv file or an html report.
+
+```
+usage: configuration-auditor.py interfaces [-h] -m {fortigate,pfsense} [-o OUTPUT] [-oh OUTPUT_HTML] [--autofix] config
+
+positional arguments:
+  config                Configuration file exported from the device
+
+options:
+  -h, --help            show this help message and exit
+  -m, --module {fortigate,pfsense}
+                        Configuration module to use (required). Available: fortigate, pfsense
+  -o, --output OUTPUT   Output CSV File
+  -oh, --output-html OUTPUT_HTML
+                        Export a standalone HTML report with Aliases/Interfaces/Zones/Rules
+  --autofix             Automatically try to fix errors in input file
+
 ```
 
 The `--module` / `-m` flag is **required**.

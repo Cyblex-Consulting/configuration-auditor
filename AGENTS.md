@@ -45,8 +45,10 @@ Vendor-specific runtime paths (FortiGate module):
   - `modules/fortigate/` — full impl: `module.py` (parsing via fortios_xutils +
     check discovery), `device.py` (`FortigateDevice`), `fortiguard.py`,
     `checks/<benchmark>/check-*.py`.
-  - `modules/pfsense/` — SKELETON only: `module.py`/`device.py` raise
-    `NotImplementedError`; parsing and real checks are TODO.
+  - `modules/pfsense/` — full impl: `module.py` (parses config.xml with stdlib
+    `xml.etree` into nested dicts/lists), `device.py` (`PfsenseDevice`, slash-path
+    `get_config`), `checks/cis_1_1_0/` (CIS pfSense Firewall Benchmark v1.1.0, 33
+    checks; auto where config.xml has the data, manual otherwise). No extra deps.
 
 ## Module discovery (non-obvious)
 
@@ -71,7 +73,8 @@ Create `modules/<vendor>/` with `__init__.py` (a `get_module(display, verbose)`
 factory), `module.py` (a `Module` subclass: set `name`/`description`/
 `device_class`, implement `parse()` and `load_checks()`), `device.py` (a `Device`
 subclass implementing `get_config()`), and a `checks/` package using the
-discovery `__init__.py` pattern. See `modules/pfsense/` for the minimal skeleton.
+discovery `__init__.py` pattern. See `modules/pfsense/` for a compact reference
+implementation (stdlib-only parser).
 
 ## Adding a check
 
