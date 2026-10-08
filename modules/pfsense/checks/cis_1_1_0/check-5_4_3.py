@@ -14,6 +14,18 @@ class Check_Pfsense_5_4_3(Checker):
         self.benchmark_author = "CIS"
 
     def do_check(self):
-        self.add_question_context("For each OpenVPN server (VPN > OpenVPN), under "
-                                  "'Cryptographic Settings', verify TLS is enabled.")
-        return self.ask_if_correct("Is OpenVPN configured to use TLS encryption?")
+        openvpnservers = self.device.get_list("openvpn/openvpn-server")
+        if not openvpnservers:
+            self.set_message("No OpenVPN server configured under openvpn/openvpn-server")
+            return True
+    
+        result = True
+        for server in openvpnservers:
+            self.set_message(f"OpenVPN configuration:")
+            if not "tls" in server.keys() or not server["tls"]:
+                self.add_message(f"- OpenVPN server '{server['vpnid']}': TLS disabled")
+                result =  False
+            else:
+                self.add_message(f"- OpenVPN server '{server['vpnid']}': TLS enabled")
+
+        return result

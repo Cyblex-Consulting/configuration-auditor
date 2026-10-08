@@ -90,7 +90,7 @@ def main(argv=None):
             sys.exit(-1)
 
         rows = []
-        headers = ['#', 'Interface', 'Action', 'Proto', 'Source', 'S.Port', 'Dest', 'D.Port', 'Descr', 'Disabled', 'Log']
+        headers = ['#', 'Interface', 'Action', 'Proto', 'Source', 'S.Port', 'Dest', 'D.Port', 'Descr', 'Status', 'Log']
 
         # pfSense behaviour
         if module.name == 'pfsense':
@@ -113,9 +113,9 @@ def main(argv=None):
                 if isinstance(d, dict) and d.get('port'):
                     dstport = str(d.get('port'))
                 descr = rule.get('descr', '')
-                disabled = 'yes' if 'disabled' in rule else ''
+                status = 'disabled' if 'disabled' in rule else 'enabled'
                 log = 'yes' if 'log' in rule else ''
-                rows.append([str(i), iface, action, proto, src, srcport, dst, dstport, descr, disabled, log])
+                rows.append([str(i), iface, action, proto, src, srcport, dst, dstport, descr, status, log])
 
         # FortiGate: use parsed firewall policies
         elif module.name == 'fortigate':
@@ -159,9 +159,9 @@ def main(argv=None):
                 # Description: prefer comments then name
                 descr = p.get('comments') or p.get('name') or ''
 
-                disabled = 'yes' if p.get('status') == 'disable' else ''
+                status = 'disabled' if p.get('status') == 'disable' else 'enabled'
                 log = 'yes' if p.get('logtraffic') else ''
-                rows.append([str(i), iface, action, proto, src, srcport, dst, dstport, descr, disabled, log])
+                rows.append([str(i), iface, action, proto, src, srcport, dst, dstport, descr, status, log])
 
         else:
             print(f'[!] The rules action is not implemented for module {module.name}')
@@ -379,7 +379,9 @@ def main(argv=None):
                     else:
                         dst = str(rule.get('destination', ''))
                     descr = rule.get('descr', '')
-                    rules_rows.append((str(i), iface, action, proto, src, dst, descr))
+                    status = 'disabled' if 'disabled' in rule else 'enabled'
+                    # tuple: idx, iface, status, action, proto, src, dst, descr
+                    rules_rows.append((str(i), iface, status, action, proto, src, dst, descr))
 
             # FortiGate: use policies when filter rules are not available
             elif module.name == 'fortigate' and hasattr(device, 'get_policies'):
@@ -410,7 +412,8 @@ def main(argv=None):
                         dst = str(daddr or '')
 
                     descr = p.get('comments') or p.get('name') or ''
-                    rules_rows.append((str(i), iface, action, proto, src, dst, descr))
+                    status = 'disabled' if p.get('status') == 'disable' else 'enabled'
+                    rules_rows.append((str(i), iface, status, action, proto, src, dst, descr))
         except Exception:
             rules_rows = []
 
@@ -462,14 +465,22 @@ def main(argv=None):
                 return f'<span class="tag is-danger">{escape(action)}</span>'
             return escape(action)
 
+        def status_cell(status):
+            s = str(status or '').lower()
+            if s == 'enabled':
+                return f'<span class="tag is-success">{escape(status)}</span>'
+            if s == 'disabled':
+                return f'<span class="tag is-danger">{escape(status)}</span>'
+            return escape(status)
+
         # construct rules table rows HTML
         rule_trs = []
         for r in rules_rows:
-            # r = (idx, iface, action, proto, src, dst, descr)
-            cells = [escape(r[0]), cell_with_detail(r[1]), action_cell(r[2]), escape(r[3]), cell_with_detail(r[4]), cell_with_detail(r[5]), escape(r[6])]
+            # r = (idx, iface, status, action, proto, src, dst, descr)
+            cells = [escape(r[0]), cell_with_detail(r[1]), status_cell(r[2]), action_cell(r[3]), escape(r[4]), cell_with_detail(r[5]), cell_with_detail(r[6]), escape(r[7])]
             tds = ''.join(f'<td>{c}</td>' for c in cells)
             rule_trs.append(f'<tr>{tds}</tr>')
-        rules_html = f'<table><thead><tr>{"".join(f"<th>{escape(h)}</th>" for h in ["#","Interface","Action","Proto","Source","Dest","Descr"])}</tr></thead><tbody>{"".join(rule_trs)}</tbody></table>'
+        rules_html = f'<table><thead><tr>{"".join(f"<th>{escape(h)}</th>" for h in ["#","Interface","Status","Action","Proto","Source","Dest","Descr"])}</tr></thead><tbody>{"".join(rule_trs)}</tbody></table>'
 
         # build hidden detail templates for aliases and interfaces
         alias_templates = []
