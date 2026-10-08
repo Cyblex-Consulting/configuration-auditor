@@ -134,6 +134,23 @@ keyed by the config file path. By default a rerun overwrites the cache; add
 `-c` / `--resume` to reload previous **manual** answers (automatic checks always
 rerun).
 
+## Install with pipx
+
+This project can be installed as a standalone CLI with `pipx`. From the
+repository root run:
+
+```bash
+pipx install .
+```
+
+or from the git repository:
+
+```bash
+pipx install git+https://github.com/Cyblex-Consulting/configuration-auditor.git
+```
+
+After installation the `configuration-auditor` command will be available on the PATH.
+
 ## Adding a module
 
 Create a sub-package under `modules/<vendor>/` with:

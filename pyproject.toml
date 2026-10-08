@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "configuration-auditor"
+version = "0.1.0"
+description = "Configuration Auditor - audit exported firewall device configs against security benchmarks"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "GPLv2" }
+authors = [ { name = "CYBLEX Consulting" } ]
+
+[project.scripts]
+configuration-auditor = "configuration_auditor:main"
+
+[tool.setuptools]
+py-modules = ["configuration_auditor"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core", "modules*", "modules.*"]
