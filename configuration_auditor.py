@@ -5,14 +5,108 @@ This wraps the existing top-level script logic in a `main()` function so
 packaging entry points can reference `configuration_auditor:main`.
 """
 import argparse
+import ipaddress
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 from core.display import Display
 import html as _html
 from core.registry import available_modules, load_module
+
+
+_IP_FORMAT = re.compile(r'^[0-9A-Fa-f:.]+$')
+_PORT_FORMAT = re.compile(r'^\d+$')
+_PROTOCOL_FORMAT = re.compile(r'^(tcp|udp|icmp|any)$', re.IGNORECASE)
+
+
+def _prompt_ip(label):
+    while True:
+        value = input(f'{label}: ').strip()
+        if not value:
+            return value
+        if _IP_FORMAT.fullmatch(value):
+            try:
+                ipaddress.ip_address(value)
+                return value
+            except ValueError:
+                pass
+        print('[!] Invalid IP address. Enter a valid IPv4 or IPv6 address, or leave it empty.')
+
+
+def _prompt_port(label):
+    while True:
+        value = input(f'{label}: ').strip()
+        if not value:
+            return value
+        if _PORT_FORMAT.fullmatch(value) and int(value) <= 65535:
+            return value
+        print('[!] Invalid port. Enter an integer between 0 and 65535, or leave it empty.')
+
+
+def _prompt_protocol():
+    while True:
+        value = input('Protocol (tcp/udp/icmp/any): ').strip().lower()
+        if not value:
+            return 'any'
+        if _PROTOCOL_FORMAT.fullmatch(value):
+            return value
+        print('[!] Invalid protocol. Choose tcp, udp, icmp, or any.')
+
+
+def _prompt_interface(device):
+    interfaces = device.get_interfaces()
+    if isinstance(interfaces, dict):
+        interface_names = {str(name) for name in interfaces}
+    else:
+        interface_names = {
+            str(item.get('edit') or item.get('name'))
+            for item in interfaces
+            if isinstance(item, dict) and (item.get('edit') or item.get('name'))
+        }
+
+    # Firewall rules can reference virtual interfaces such as enc0 that are
+    # not present in the configured <interfaces> section.
+    get_rules = getattr(device, 'get_filter_rules', None)
+    for rule in get_rules() if get_rules else []:
+        if not isinstance(rule, dict):
+            continue
+        configured = rule.get('interface')
+        values = configured if isinstance(configured, list) else [configured]
+        for value in values:
+            interface_names.update(
+                item for item in re.split(r'[,\s]+', str(value or '').strip())
+                if item and item.lower() != 'any'
+            )
+
+    while True:
+        value = input('Interface (source): ').strip()
+        if value in interface_names:
+            return value
+        if not value:
+            print('[!] An interface is required. Choose one of: '
+                  + ', '.join(sorted(interface_names)))
+        else:
+            print('[!] Unknown interface. Choose one of: '
+                  + ', '.join(sorted(interface_names)))
+
+
+def _interface_description(device, interface):
+    if not interface:
+        return 'All interfaces'
+    interfaces = device.get_interfaces()
+    if isinstance(interfaces, dict):
+        config = interfaces.get(interface)
+    else:
+        config = next((item for item in interfaces
+                       if isinstance(item, dict)
+                       and (item.get('edit') or item.get('name')) == interface), None)
+    if not isinstance(config, dict):
+        return 'Description unavailable'
+    return str(config.get('descr') or config.get('description')
+               or config.get('alias') or 'No description')
 
 
 def main(argv=None):
@@ -50,6 +144,9 @@ def main(argv=None):
     analyse_parser.add_argument('-w', '--wan', help='List of wan interfaces separated by spaces (example: --wan port1 port2)', nargs='+', default=None)
 
     subparsers.add_parser('rules', parents=[parent_common], help='List firewall rules in a pretty table')
+    simulate_parser = subparsers.add_parser('simulate', parents=[parent_common],
+                                             help='Interactively simulate firewall policy matching')
+    simulate_parser.add_argument('-j', '--json', help='Input file is json already parsed by the module', action='store_true')
     subparsers.add_parser('aliases', parents=[parent_common], help='List address/service aliases in a pretty table')
     subparsers.add_parser('interfaces', parents=[parent_common], help='List interfaces in a pretty table')
     subparsers.add_parser('zones', parents=[parent_common], help='List zones in a pretty table')
@@ -72,6 +169,128 @@ def main(argv=None):
         sys.exit(-1)
 
     print(f'[+] Using module: {module.name} ({module.description})')
+
+    if args.verb == 'simulate':
+        try:
+            if args.json:
+                device = module.parse_json(filepath)
+            else:
+                device = module.parse(filepath, autofix=args.autofix)
+        except (NotImplementedError, ValueError) as e:
+            print(f'[!] {e}')
+            sys.exit(-1)
+
+        if module.name == 'fortigate':
+            from modules.fortigate.simulator import FortigateSimulator as Simulator
+            from modules.fortigate.simulator import SimulationQuery
+        elif module.name == 'pfsense':
+            from modules.pfsense.simulator import PfsenseSimulator as Simulator
+            from modules.pfsense.simulator import SimulationQuery
+        else:
+            print(f'[!] The simulate action is not implemented for module {module.name}')
+            sys.exit(-1)
+
+        print('[+] Enter the traffic to simulate (press Enter for an unconstrained value)')
+        query = SimulationQuery(
+            interface=_prompt_interface(device),
+            source=_prompt_ip('Source IP'),
+            source_port=_prompt_port('Source port'),
+            destination=_prompt_ip('Destination IP'),
+            destination_port=_prompt_port('Destination port'),
+            protocol=_prompt_protocol(),
+        )
+        print('-' * 60)
+        result = Simulator(device).evaluate(query)
+        rows = []
+        row_colors = []
+        cell_colors = []
+        final_policy = result['matched_policy']
+
+        def values_text(value, default='any'):
+            if value is None or value == '':
+                return default
+            if isinstance(value, list):
+                return ','.join(str(item) for item in value)
+            return str(value)
+
+        def endpoint_text(endpoint):
+            if not isinstance(endpoint, dict):
+                return values_text(endpoint), 'any'
+            if 'any' in endpoint:
+                address = 'any'
+            else:
+                address = values_text(endpoint.get('address') or endpoint.get('network'))
+            return address, values_text(endpoint.get('port'))
+
+        def rule_content(policy):
+            if module.name == 'pfsense':
+                source, source_port = endpoint_text(policy.get('source'))
+                destination, destination_port = endpoint_text(policy.get('destination'))
+                protocol = values_text(policy.get('protocol'))
+            else:
+                source = values_text(policy.get('srcaddr') or policy.get('source'))
+                destination = values_text(policy.get('dstaddr') or policy.get('destination'))
+                source_port = values_text(policy.get('srcport') or policy.get('source-port'))
+                destination_port = values_text(
+                    policy.get('dstport') or policy.get('destination-port') or policy.get('service'))
+                protocol = values_text(policy.get('protocol') or policy.get('service'))
+            return f'{protocol}: {source}:{source_port} - {destination}:{destination_port}'
+
+        for item in result['evaluations']:
+            if not item['interface_match']:
+                continue
+            is_final = final_policy is not None and item['order'] == final_policy['order']
+            if is_final:
+                color = '\033[1;32m' if result['decision'] == 'pass' else '\033[1;31m'
+                status = 'FINAL'
+                action = item['action']
+            elif item['matched']:
+                status = 'MATCH'
+                color = '\033[1;33m'
+                action = item['action']
+            else:
+                status = 'NO MATCH'
+                color = None
+                action = item['action']
+            label = item['name'] or '(unnamed)'
+            rows.append([
+                str(item['order'] - 1), str(item['id']), label, status, action,
+                rule_content(item['policy']),
+            ])
+            row_colors.append(color)
+            action_color = ('\033[1;32m' if action == 'pass' else
+                            '\033[1;31m' if action == 'block' else None)
+            cell_colors.append({4: action_color} if action_color else {})
+
+        # pfSense applies an implicit block when no configured rule matches.
+        implicit_is_final = final_policy is None
+        rows.append([
+            '-', '(implicit)', 'Implicit default deny',
+            'FINAL' if implicit_is_final else 'DEFAULT', 'block',
+            'any: any - any:any',
+        ])
+        row_colors.append('\033[1;31m' if implicit_is_final else None)
+        cell_colors.append({4: '\033[1;31m'})
+        if rows:
+            title_lines = [
+                f"Interface : {query.interface or 'any'}",
+                f"Description: {_interface_description(device, query.interface)}",
+            ]
+            display.print_table(['Order', 'Rule ID', 'Policy', 'Evaluation', 'Action', 'Rule content'], rows,
+                                max_widths={2: 40, 5: 55}, row_colors=row_colors,
+                                cell_colors=cell_colors, title_lines=title_lines)
+        else:
+            print('[+] No matching rules found')
+        matched = result['matched_policy']
+        if matched is None:
+            print(f'\033[1;31m[!] Result: BLOCK (implicit {module.name} deny)\033[0m')
+        else:
+            color = '\033[1;32m' if result['decision'] == 'pass' else '\033[1;31m'
+            print(f"{color}[+] Final decision: {result['decision'].upper()} by policy {matched['id']}"
+                  f"{(' - ' + matched['name']) if matched['name'] else ''}\033[0m")
+            if matched['unsupported']:
+                print('[!] Not modelled in this simulation: ' + ', '.join(matched['unsupported']))
+        return
 
     # The rest of the CLI behaviour is implemented inline so this
     # importable entrypoint is self-contained and does not rely on the

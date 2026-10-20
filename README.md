@@ -24,11 +24,13 @@ modules/
     module.py                #   parsing (fortios_xutils) + check discovery
     device.py                #   FortigateDevice (config accessors)
     fortiguard.py            #   FortiGuard category/app ID lookup
+    simulator.py             #   ordered, read-only policy what-if evaluator
     libs/FortigateAppControlID   # git submodule (App Control CSVs)
     checks/<benchmark>/      #   the actual checks
   pfsense/                   # pfSense module
     module.py                #   parses config.xml (stdlib xml.etree)
     device.py                #   PfsenseDevice (slash-path config accessors)
+    simulator.py             #   ordered, read-only policy what-if evaluator
     checks/cis_1_1_0/        #   CIS pfSense Firewall Benchmark v1.1.0
 ```
 
@@ -60,7 +62,7 @@ characters or hits a known parser bug. The `--autofix` flag works around both
 Configuration Auditor - apply a security benchmark to a device configuration file. Example: configuration-auditor.py analyse -m pfsense config.xml
 
 positional arguments:
-  {analyse,rules,aliases,interfaces,zones}
+  {analyse,rules,simulate,aliases,interfaces,zones}
                         Action to perform
     analyse             Run analysis checks
     rules               List firewall rules in a pretty table
@@ -109,6 +111,34 @@ python3 configuration-auditor.py analyse -m fortigate -q -o results.csv -l 1 2 -
 ```
 
 Alternatively, other actions offer an option to print to the terminal rules, interfaces, zones or aliases and to export them to a csv file or an html report.
+
+### Interactive rule simulator
+
+The `simulate` action is available for FortiGate and pfSense configurations. It prompts
+for an ingress interface, source and destination IP addresses, ports, and
+protocol, then evaluates every policy in its configured order. The output
+displays only the policies that match, in evaluation order, and reports the
+first matching policy's `pass`/`block` result. If no policy matches, the
+implicit default deny is reported.
+
+```bash
+python3 configuration-auditor.py simulate -m fortigate firewall.conf
+```
+
+Already parsed JSON can be simulated with `-j`:
+
+```bash
+python3 configuration-auditor.py simulate -m fortigate -j parsed.json
+```
+
+For FortiGate, the simulator resolves interfaces and zones, IPv4 address
+objects and groups, custom services and service groups, service port ranges,
+disabled policies, policy order, and address negation. For pfSense, it resolves
+interfaces, IPv4 aliases/networks, port aliases, source and destination ports,
+disabled rules, protocol combinations, and rule order. It is intentionally
+read-only. FQDN/runtime resolution, schedules, VIP/NAT translation, Internet
+Service Database matches, identity rules, and post-policy UTM decisions are
+reported as not modelled rather than guessed.
 
 ```
 usage: configuration-auditor.py interfaces [-h] -m {fortigate,pfsense} [-o OUTPUT] [-oh OUTPUT_HTML] [--autofix] config
