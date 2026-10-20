@@ -367,24 +367,59 @@ def main(argv=None):
                         if 'any' in rule.get('source'):
                             src = 'any'
                         else:
-                            src = ';'.join(str(v) for v in rule.get('source').values() if isinstance(v, (str, int)))
+                            src = ';'.join(str(v) for k, v in rule.get('source').items()
+                                           if k != 'port' and isinstance(v, (str, int)))
                     else:
                         src = str(rule.get('source', ''))
+                    source = rule.get('source')
+                    srcport = str(source.get('port') or 'any') if isinstance(source, dict) else 'any'
                     dst = ''
                     if isinstance(rule.get('destination'), dict):
                         if 'any' in rule.get('destination'):
                             dst = 'any'
                         else:
-                            dst = ';'.join(str(v) for v in rule.get('destination').values() if isinstance(v, (str, int)))
+                            dst = ';'.join(str(v) for k, v in rule.get('destination').items()
+                                           if k != 'port' and isinstance(v, (str, int)))
                     else:
                         dst = str(rule.get('destination', ''))
+                    destination = rule.get('destination')
+                    dstport = str(destination.get('port') or 'any') if isinstance(destination, dict) else 'any'
                     descr = rule.get('descr', '')
                     status = 'disabled' if 'disabled' in rule else 'enabled'
-                    # tuple: idx, iface, status, action, proto, src, dst, descr
-                    rules_rows.append((str(i), iface, status, action, proto, src, dst, descr))
+                    # tuple: idx, iface, status, action, proto, src, srcport, dst, dstport, descr
+                    rules_rows.append((str(i), iface, status, action, proto, src, srcport, dst, dstport, descr))
 
             # FortiGate: use policies when filter rules are not available
             elif module.name == 'fortigate' and hasattr(device, 'get_policies'):
+                service_configs = {}
+                for config_name in ('firewall service custom', 'firewall service group'):
+                    try:
+                        config = device.get_config(config_name) or {}
+                        for service in config.get('edits', []):
+                            if isinstance(service, dict) and service.get('edit'):
+                                service_configs[service['edit']] = service
+                    except Exception:
+                        continue
+
+                def service_ports(service_name, seen=None):
+                    """Return the destination ports represented by a service."""
+                    seen = set() if seen is None else seen
+                    if service_name in seen:
+                        return []
+                    seen.add(service_name)
+                    service = service_configs.get(service_name, {})
+                    ports = []
+                    for protocol, key in (('TCP', 'tcp-portrange'),
+                                          ('UDP', 'udp-portrange'),
+                                          ('SCTP', 'sctp-portrange')):
+                        value = service.get(key)
+                        if value is not None:
+                            values = value if isinstance(value, list) else [value]
+                            ports.extend(f'{protocol}:{v}' for v in values)
+                    for member in service.get('member', []):
+                        ports.extend(service_ports(str(member), seen))
+                    return ports
+
                 policies = device.get_policies()
                 for i, p in enumerate(policies):
                     if not isinstance(p, dict):
@@ -404,16 +439,25 @@ def main(argv=None):
                         src = ','.join(str(x) for x in saddr)
                     else:
                         src = str(saddr or '')
+                    srcport = str(p.get('srcport') or p.get('source-port') or '')
 
                     daddr = p.get('dstaddr') or p.get('destination')
                     if isinstance(daddr, list):
                         dst = ','.join(str(x) for x in daddr)
                     else:
                         dst = str(daddr or '')
+                    dstport = str(p.get('dstport') or p.get('destination-port') or '')
+                    if not dstport:
+                        services = svc if isinstance(svc, list) else [svc]
+                        resolved_ports = []
+                        for service in services:
+                            if service is not None:
+                                resolved_ports.extend(service_ports(str(service)))
+                        dstport = ','.join(dict.fromkeys(resolved_ports))
 
                     descr = p.get('comments') or p.get('name') or ''
                     status = 'disabled' if p.get('status') == 'disable' else 'enabled'
-                    rules_rows.append((str(i), iface, status, action, proto, src, dst, descr))
+                    rules_rows.append((str(i), iface, status, action, proto, src, srcport, dst, dstport, descr))
         except Exception:
             rules_rows = []
 
@@ -465,6 +509,16 @@ def main(argv=None):
                 return f'<span class="tag is-danger">{escape(action)}</span>'
             return escape(action)
 
+        def any_cell(value):
+            if str(value or '').strip().lower() == 'any':
+                return f'<span class="tag is-danger">{escape(value)}</span>'
+            return escape(value)
+
+        def endpoint_cell(value):
+            if str(value or '').strip().lower() == 'any':
+                return any_cell(value)
+            return cell_with_detail(value)
+
         def status_cell(status):
             s = str(status or '').lower()
             if s == 'enabled':
@@ -476,11 +530,13 @@ def main(argv=None):
         # construct rules table rows HTML
         rule_trs = []
         for r in rules_rows:
-            # r = (idx, iface, status, action, proto, src, dst, descr)
-            cells = [escape(r[0]), cell_with_detail(r[1]), status_cell(r[2]), action_cell(r[3]), escape(r[4]), cell_with_detail(r[5]), cell_with_detail(r[6]), escape(r[7])]
+            # r = (idx, iface, status, action, proto, src, srcport, dst, dstport, descr)
+            cells = [escape(r[0]), cell_with_detail(r[1]), status_cell(r[2]), action_cell(r[3]),
+                     escape(r[4]), endpoint_cell(r[5]), any_cell(r[6]),
+                     endpoint_cell(r[7]), any_cell(r[8]), escape(r[9])]
             tds = ''.join(f'<td>{c}</td>' for c in cells)
             rule_trs.append(f'<tr>{tds}</tr>')
-        rules_html = f'<table><thead><tr>{"".join(f"<th>{escape(h)}</th>" for h in ["#","Interface","Status","Action","Proto","Source","Dest","Descr"])}</tr></thead><tbody>{"".join(rule_trs)}</tbody></table>'
+        rules_html = f'<table><thead><tr>{"".join(f"<th>{escape(h)}</th>" for h in ["#","Interface","Status","Action","Proto","Source","S.Port","Dest","D.Port","Descr"])}</tr></thead><tbody>{"".join(rule_trs)}</tbody></table>'
 
         # build hidden detail templates for aliases and interfaces
         alias_templates = []
