@@ -519,6 +519,11 @@ def main(argv=None):
                 return any_cell(value)
             return cell_with_detail(value)
 
+        def port_cell(value):
+            if str(value or '').strip().lower() == 'any':
+                return any_cell(value)
+            return cell_with_detail(value)
+
         def status_cell(status):
             s = str(status or '').lower()
             if s == 'enabled':
@@ -532,8 +537,8 @@ def main(argv=None):
         for r in rules_rows:
             # r = (idx, iface, status, action, proto, src, srcport, dst, dstport, descr)
             cells = [escape(r[0]), cell_with_detail(r[1]), status_cell(r[2]), action_cell(r[3]),
-                     escape(r[4]), endpoint_cell(r[5]), any_cell(r[6]),
-                     endpoint_cell(r[7]), any_cell(r[8]), escape(r[9])]
+                     escape(r[4]), endpoint_cell(r[5]), port_cell(r[6]),
+                     endpoint_cell(r[7]), port_cell(r[8]), escape(r[9])]
             tds = ''.join(f'<td>{c}</td>' for c in cells)
             rule_trs.append(f'<tr>{tds}</tr>')
         rules_html = f'<table><thead><tr>{"".join(f"<th>{escape(h)}</th>" for h in ["#","Interface","Status","Action","Proto","Source","S.Port","Dest","D.Port","Descr"])}</tr></thead><tbody>{"".join(rule_trs)}</tbody></table>'
