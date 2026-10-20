@@ -760,7 +760,24 @@ def main(argv=None):
                      endpoint_cell(r[7]), port_cell(r[8]), escape(r[9])]
             tds = ''.join(f'<td>{c}</td>' for c in cells)
             rule_trs.append(f'<tr>{tds}</tr>')
-        rules_html = f'<table><thead><tr>{"".join(f"<th>{escape(h)}</th>" for h in ["#","Interface","Status","Action","Proto","Source","S.Port","Dest","D.Port","Descr"])}</tr></thead><tbody>{"".join(rule_trs)}</tbody></table>'
+        rule_headers = ["#", "Interface", "Status", "Action", "Proto", "Source", "S.Port", "Dest", "D.Port", "Descr"]
+        rule_header_html = ''.join(
+            f'<th scope="col" class="sortable" data-column="{i}" tabindex="0" role="button" '
+            f'aria-label="Sort by {escape(header)}">{escape(header)}<span class="sort-indicator" aria-hidden="true"></span></th>'
+            for i, header in enumerate(rule_headers)
+        )
+        rule_filter_html = ''.join(
+            f'<th><label class="sr-only" for="rule-filter-{i}">Filter {escape(header)}</label>'
+            f'<input id="rule-filter-{i}" class="rule-filter" type="search" placeholder="Filter…" '
+            f'data-column="{i}" autocomplete="off"></th>'
+            for i, header in enumerate(rule_headers)
+        )
+        rules_html = (
+            f'<table id="rules-table"><thead><tr>{rule_header_html}</tr>'
+            f'<tr class="filter-row">{rule_filter_html}</tr></thead>'
+            f'<tbody>{"".join(rule_trs)}</tbody></table>'
+            '<p id="rules-result-count" class="muted" aria-live="polite"></p>'
+        )
 
         # build hidden detail templates for aliases and interfaces
         alias_templates = []
@@ -797,6 +814,12 @@ def main(argv=None):
         parts.append('table{border-collapse:collapse;width:100%;background:var(--panel-bg);border:1px solid var(--table-border);border-radius:6px;overflow:hidden}')
         parts.append('th,td{padding:8px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--table-border)}')
         parts.append('thead th{background:linear-gradient(180deg,rgba(0,0,0,0.03),transparent);font-weight:600}')
+        parts.append('#rules-table th.sortable{cursor:pointer;user-select:none;white-space:nowrap}')
+        parts.append('#rules-table th.sortable:focus{outline:2px solid var(--accent);outline-offset:-2px}')
+        parts.append('#rules-table .sort-indicator{display:inline-block;width:1em;margin-left:4px;color:var(--accent)}')
+        parts.append('#rules-table .filter-row th{padding:5px 8px;background:var(--panel-bg)}')
+        parts.append('#rules-table .rule-filter{box-sizing:border-box;width:100%;min-width:5em;padding:5px 6px;border:1px solid var(--table-border);border-radius:4px;background:var(--bg);color:var(--fg)}')
+        parts.append('.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}')
         parts.append('tbody tr:hover{background:rgba(0,0,0,0.03)}')
         parts.append('.has-detail{color:var(--accent);text-decoration:underline;cursor:pointer}')
         parts.append('.detail-template{display:none}')
@@ -919,7 +942,58 @@ def main(argv=None):
         });
 
     }
-    window.addEventListener('load',function(){initHover();initTheme();})""")
+    function initRulesTable(){
+        var table = document.getElementById('rules-table');
+        if (!table) return;
+        var tbody = table.querySelector('tbody');
+        var count = document.getElementById('rules-result-count');
+        var headers = table.querySelectorAll('th.sortable');
+        var filters = table.querySelectorAll('.rule-filter');
+        var sortColumn = -1;
+        var sortDirection = 1;
+
+        function rows(){ return Array.prototype.slice.call(tbody.querySelectorAll('tr')); }
+        function updateCount(){
+            var visible = rows().filter(function(row){ return row.hidden !== true; }).length;
+            count.textContent = visible + ' of ' + rows().length + ' rules';
+        }
+        function applyFilters(){
+            var values = Array.prototype.map.call(filters, function(input){ return input.value.trim().toLowerCase(); });
+            rows().forEach(function(row){
+                var cells = row.children;
+                row.hidden = values.some(function(value, index){
+                    return value && !((cells[index].textContent || '').toLowerCase().includes(value));
+                });
+            });
+            updateCount();
+        }
+        function sortBy(column){
+            if (sortColumn === column) sortDirection *= -1;
+            else { sortColumn = column; sortDirection = 1; }
+            var sorted = rows().sort(function(a, b){
+                var left = (a.children[column].textContent || '').trim();
+                var right = (b.children[column].textContent || '').trim();
+                if (column === 0 && !isNaN(left) && !isNaN(right)) return (Number(left) - Number(right)) * sortDirection;
+                return left.localeCompare(right, undefined, {numeric:true, sensitivity:'base'}) * sortDirection;
+            });
+            sorted.forEach(function(row){ tbody.appendChild(row); });
+            headers.forEach(function(header, index){
+                var indicator = header.querySelector('.sort-indicator');
+                indicator.textContent = index === sortColumn ? (sortDirection === 1 ? '▲' : '▼') : '';
+                header.setAttribute('aria-sort', index === sortColumn ? (sortDirection === 1 ? 'ascending' : 'descending') : 'none');
+            });
+            applyFilters();
+        }
+        headers.forEach(function(header){
+            header.addEventListener('click', function(){ sortBy(Number(header.dataset.column)); });
+            header.addEventListener('keydown', function(event){
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); sortBy(Number(header.dataset.column)); }
+            });
+        });
+        filters.forEach(function(input){ input.addEventListener('input', applyFilters); });
+        updateCount();
+    }
+    window.addEventListener('load',function(){initHover();initTheme();initRulesTable();})""")
         
         parts.append('function initTheme(){var sel=document.getElementById("theme-select");var pref=localStorage.getItem("auditor-theme");if(!pref){pref=(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";}applyTheme(pref);sel.value=pref;sel.addEventListener("change",function(){applyTheme(sel.value)});}function applyTheme(t){if(t==="dark"){document.documentElement.classList.add("dark","is-dark");document.documentElement.setAttribute("data-theme","dark");}else{document.documentElement.classList.remove("dark","is-dark");document.documentElement.setAttribute("data-theme","light");}localStorage.setItem("auditor-theme",t);}')
         parts.append('</script>')
